@@ -1,0 +1,40 @@
+{
+  "name": "pi-provider-umans",
+  "version": "1.0.0",
+  "description": "Umans.ai provider for pi — OpenAI-compatible endpoint with dynamic model discovery",
+  "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "umans",
+    "provider",
+    "llm",
+    "pi",
+    "coding-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karutoil/pi-provider-umans.git"
+  },
+  "bugs": {
+    "url": "https://github.com/karutoil/pi-provider-umans/issues"
+  },
+  "homepage": "https://github.com/karutoil/pi-provider-umans#readme",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
