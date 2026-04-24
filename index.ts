@@ -195,14 +195,6 @@ function fmtDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function rightAlign(text: string): string {
-  const cols = (process.stdout as any)?.columns ?? 80;
-  // Strip ANSI codes to measure visible width
-  const visible = text.replace(/\x1b\[[0-9;]*m/g, "");
-  const pad = Math.max(0, cols - visible.length - 1);
-  return " ".repeat(pad) + text;
-}
-
 // Shared state between status bar helpers
 let lastApiKey: string | null = null;
 
@@ -226,7 +218,7 @@ async function updateUsageStatus(ctx: any, tps?: string, ttft?: string): Promise
 
   ctx.ui.setStatus(
     "umans",
-    rightAlign(theme.fg("dim", `Umans ${perfStr}${reqPart}${resetPart}`)),
+    theme.fg("dim", `Umans ${perfStr}${reqPart}${resetPart}`),
   );
 }
 
@@ -269,7 +261,7 @@ export default function (pi: ExtensionAPI) {
       await updateUsageStatus(ctx, undefined, undefined);
     } else {
       const theme = ctx.ui.theme;
-      ctx.ui.setStatus("umans", rightAlign(theme.fg("dim", "Umans: /login umans")));
+      ctx.ui.setStatus("umans", theme.fg("dim", "Umans: /login umans"));
     }
   });
 
@@ -325,7 +317,7 @@ export default function (pi: ExtensionAPI) {
     const perfStr = usageStr ? `T/S:${tps} │ TTFT:${ttft}${usageStr}` : `T/S:${tps} │ TTFT:${ttft}`;
     ctx.ui.setStatus(
       "umans",
-      rightAlign(theme.fg("dim", `Umans ${perfStr}`)),
+      theme.fg("dim", `Umans ${perfStr}`),
     );
   });
 }
