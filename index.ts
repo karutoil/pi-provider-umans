@@ -216,9 +216,10 @@ async function updateUsageStatus(ctx: any, tps?: string, ttft?: string): Promise
     : `${usage.requestsUsed}`;
   const resetPart = usage.resetsInMinutes !== null ? ` ⟳${usage.resetsInMinutes}m` : "";
 
-  ctx.ui.setStatus(
+  ctx.ui.setWidget(
     "umans",
-    theme.fg("dim", `Umans ${perfStr}${reqPart}${resetPart}`),
+    [theme.fg("dim", `Umans ${perfStr}${reqPart}${resetPart}`)],
+    { placement: "belowEditor" },
   );
 }
 
@@ -261,7 +262,7 @@ export default function (pi: ExtensionAPI) {
       await updateUsageStatus(ctx, undefined, undefined);
     } else {
       const theme = ctx.ui.theme;
-      ctx.ui.setStatus("umans", theme.fg("dim", "Umans: /login umans"));
+      ctx.ui.setWidget("umans", [theme.fg("dim", "Umans: /login umans")], { placement: "belowEditor" });
     }
   });
 
@@ -315,9 +316,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     const perfStr = usageStr ? `T/S:${tps} │ TTFT:${ttft}${usageStr}` : `T/S:${tps} │ TTFT:${ttft}`;
-    ctx.ui.setStatus(
+    ctx.ui.setWidget(
       "umans",
-      theme.fg("dim", `Umans ${perfStr}`),
+      [theme.fg("dim", `Umans ${perfStr}`)],
+      { placement: "belowEditor" },
     );
   });
 }
