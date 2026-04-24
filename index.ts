@@ -203,6 +203,9 @@ function rightAlign(text: string): string {
   return " ".repeat(pad) + text;
 }
 
+// Shared state between status bar helpers
+let lastApiKey: string | null = null;
+
 async function updateUsageStatus(ctx: any, tps?: string, ttft?: string): Promise<void> {
   const theme = ctx.ui.theme;
   const apiKey = lastApiKey;
@@ -257,7 +260,6 @@ export default function (pi: ExtensionAPI) {
   // --- Status bar: usage + performance ---
   let turnStartTime = 0;
   let firstTokenTime = 0;
-  let lastApiKey: string | null = null;
 
   // Show usage on session start
   pi.on("session_start", async (_event, ctx) => {
