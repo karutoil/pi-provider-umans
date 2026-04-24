@@ -1,10 +1,18 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { ProviderModelConfig } from "@mariozechner/pi-ai";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
+import type {
+  ProviderModelConfig,
+  OAuthCredentials,
+  OAuthLoginCallbacks,
+  AssistantMessage,
+} from "@mariozechner/pi-ai";
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
 
 const MODELS_INFO_URL = "https://api.code.umans.ai/v1/models/info";
+const USAGE_URL = "https://api.code.umans.ai/v1/usage";
 
-// Fallback models used if the dynamic fetch fails
 const FALLBACK_MODELS: ProviderModelConfig[] = [
   {
     id: "umans-coder",
@@ -12,12 +20,9 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 256000,
-    maxTokens: 8192,
+    maxTokens: 65000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
   },
   {
     id: "umans-kimi-k2.5",
@@ -25,12 +30,9 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 256000,
-    maxTokens: 8192,
+    maxTokens: 65000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
   },
   {
     id: "umans-kimi-k2.6",
@@ -38,12 +40,9 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 262144,
-    maxTokens: 8192,
+    maxTokens: 65000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
   },
   {
     id: "umans-glm-5.1",
@@ -53,10 +52,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 204800,
     maxTokens: 131072,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
   },
   {
     id: "umans-minimax-m2.5",
@@ -66,16 +62,14 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 204800,
     maxTokens: 131072,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
-  }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+  },
 ];
 
 function mapUmansModel(id: string, info: any): ProviderModelConfig {
   const caps = info.capabilities ?? {};
   const supportsVision = caps.supports_vision === true;
+  const rawMaxTokens = caps.max_tokens ?? 8192;
 
   return {
     id,
@@ -83,54 +77,54 @@ function mapUmansModel(id: string, info: any): ProviderModelConfig {
     reasoning: true,
     input: supportsVision ? ["text", "image"] : ["text"],
     contextWindow: caps.context_window ?? 200000,
-    // API reports conservative per-request defaults (e.g. 8192 for Kimi models)
-    // but these models support much more — floor at 50000 so reasoning has room
-    maxTokens: Math.max(caps.max_tokens ?? 8192, 50000),
+    maxTokens: rawMaxTokens <= 8192 ? 65000 : Math.max(rawMaxTokens, 50000),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false
-    }
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
   };
 }
 
-// Fetch dynamic models at module load time (top-level await in ESM)
+// Dynamic model fetch at module load time
 let models: ProviderModelConfig[] = FALLBACK_MODELS;
 
 try {
   const res = await fetch(MODELS_INFO_URL, { signal: AbortSignal.timeout(5000) });
   if (res.ok) {
     const data = await res.json();
-    models = Object.entries(data).map(([id, info]) => mapUmansModel(id, info as any));
+    models = Object.entries(data).map(([id, info]) =>
+      mapUmansModel(id, info as any),
+    );
   } else {
-    console.warn(`[pi-provider-umans] Models API returned ${res.status}, using fallback`);
+    console.warn(
+      `[pi-provider-umans] Models API returned ${res.status}, using fallback`,
+    );
   }
 } catch (err) {
-  console.warn("[pi-provider-umans] Failed to fetch dynamic models, using fallback:", err);
+  console.warn(
+    "[pi-provider-umans] Failed to fetch dynamic models, using fallback:",
+    err,
+  );
 }
 
-// OAuth-style login that stores the API key in auth.json
-// This lets users run `/login umans` and paste their API key
-async function loginUmans(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-  const apiKey = await callbacks.onPrompt({
-    message: "Enter your Umans API key (starts with sk-):"
-  });
+// ---------------------------------------------------------------------------
+// OAuth (API key stored in auth.json)
+// ---------------------------------------------------------------------------
 
-  // Strip whitespace and validate basic prefix
+async function loginUmans(
+  callbacks: OAuthLoginCallbacks,
+): Promise<OAuthCredentials> {
+  const apiKey = await callbacks.onPrompt({
+    message: "Enter your Umans API key (starts with sk-):",
+  });
   const key = apiKey.trim();
   if (!key.startsWith("sk-")) {
     throw new Error("Invalid API key: must start with 'sk-'");
   }
-
-  return {
-    refresh: key,
-    access: key,
-    expires: 0 // API key doesn't expire
-  };
+  return { refresh: key, access: key, expires: 0 };
 }
 
-function refreshUmansToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-  // API keys don't need refreshing — return as-is
+function refreshUmansToken(
+  credentials: OAuthCredentials,
+): Promise<OAuthCredentials> {
   return Promise.resolve(credentials);
 }
 
@@ -138,11 +132,79 @@ function getApiKey(credentials: OAuthCredentials): string {
   return credentials.access;
 }
 
+// ---------------------------------------------------------------------------
+// Usage API
+// ---------------------------------------------------------------------------
+
+interface UsageData {
+  plan: string;
+  requestsUsed: number;
+  requestsLimit: number | null;
+  remainingRequests: number | null;
+  resetsInMinutes: number | null;
+  concurrent: number;
+  concurrentLimit: number | null;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+async function fetchUsage(apiKey: string): Promise<UsageData | null> {
+  try {
+    const res = await fetch(USAGE_URL, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const plan = data.plan?.display_name || data.plan?.slug || "Unknown";
+    const limits = data.limits ?? {};
+    const usage = data.usage ?? {};
+    const window = data.window ?? {};
+
+    return {
+      plan,
+      requestsUsed: usage.requests_in_window ?? 0,
+      requestsLimit: limits.requests?.limit ?? null,
+      remainingRequests: usage.remaining_requests ?? null,
+      resetsInMinutes: window.remaining_minutes ?? null,
+      concurrent: usage.concurrent_sessions ?? 0,
+      concurrentLimit: limits.concurrency?.limit ?? null,
+      tokensIn: usage.tokens_in ?? 0,
+      tokensOut: usage.tokens_out ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Status bar
+// ---------------------------------------------------------------------------
+
+function fmtNum(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// ---------------------------------------------------------------------------
+// Extension
+// ---------------------------------------------------------------------------
+
 export default function (pi: ExtensionAPI) {
+  // --- Provider registration ---
   pi.registerProvider("umans", {
     baseUrl: "https://api.code.umans.ai/v1",
     api: "openai-completions",
-    apiKey: "UMANS_API_KEY", // fallback: env var
+    apiKey: "UMANS_API_KEY",
     authHeader: true,
     models,
     oauth: {
@@ -150,6 +212,88 @@ export default function (pi: ExtensionAPI) {
       login: loginUmans,
       refreshToken: refreshUmansToken,
       getApiKey,
+    },
+  });
+
+  // --- Inject thinking into requests ---
+  pi.on("before_provider_request", (event) => {
+    const model: string = event.payload.model ?? "";
+    if (!model.startsWith("umans-")) return;
+    return { ...event.payload, thinking: { type: "enabled" } };
+  });
+
+  // --- Status bar: usage + performance ---
+  let turnStartTime = 0;
+  let firstTokenTime = 0;
+  let lastApiKey: string | null = null;
+
+  // Fetch and display usage on session start
+  pi.on("session_start", async (_event, ctx) => {
+    // We'll update the status bar when we get the API key from a request
+    const theme = ctx.ui.theme;
+    ctx.ui.setStatus("umans", theme.fg("dim", "Umans: initializing..."));
+  });
+
+  // Track turn timing
+  pi.on("turn_start", async (_event, _ctx) => {
+    turnStartTime = Date.now();
+    firstTokenTime = 0;
+  });
+
+  // Track first token (TTFT)
+  pi.on("message_update", async (event, ctx) => {
+    if (firstTokenTime === 0 && turnStartTime > 0) {
+      const msg = event.message as AssistantMessage;
+      if (msg.role === "assistant" && msg.content?.length > 0) {
+        firstTokenTime = Date.now();
+        const ttft = firstTokenTime - turnStartTime;
+        const theme = ctx.ui.theme;
+        ctx.ui.setStatus(
+          "umans-ttft",
+          theme.fg("dim", `TTFT: ${fmtDuration(ttft)}`),
+        );
+      }
     }
+  });
+
+  // On turn end, compute TPS and refresh usage
+  pi.on("turn_end", async (event, ctx) => {
+    const theme = ctx.ui.theme;
+    const msg = event.message as AssistantMessage;
+
+    if (msg.role !== "assistant" || turnStartTime === 0) return;
+
+    const elapsed = Date.now() - turnStartTime;
+    const outputTokens = msg.usage?.output ?? 0;
+    const tps =
+      elapsed > 0 && outputTokens > 0 ? (outputTokens / (elapsed / 1000)).toFixed(0) : "—";
+    const ttft = firstTokenTime > 0 ? fmtDuration(firstTokenTime - turnStartTime) : "—";
+
+    // Try to get API key for usage fetch
+    // Use the apiKey from environment or oauth
+    const apiKey = process.env.UMANS_API_KEY || lastApiKey;
+    let usageStr = "";
+
+    if (apiKey) {
+      lastApiKey = apiKey;
+      const usage = await fetchUsage(apiKey);
+      if (usage) {
+        const reqPart =
+          usage.requestsLimit !== null
+            ? `${usage.requestsUsed}/${usage.requestsLimit}`
+            : `${usage.requestsUsed}`;
+        const resetPart =
+          usage.resetsInMinutes !== null
+            ? ` ⟳${usage.resetsInMinutes}m`
+            : "";
+        usageStr = ` │ ${reqPart}${resetPart}`;
+      }
+    }
+
+    const perfStr = `T/S:${tps} │ TTFT:${ttft}`;
+    ctx.ui.setStatus(
+      "umans",
+      theme.fg("dim", `Umans ${perfStr}${usageStr}`),
+    );
   });
 }
