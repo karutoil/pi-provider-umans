@@ -195,6 +195,38 @@ function fmtDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function rightAlign(text: string): string {
+  const cols = (process.stdout as any)?.columns ?? 80;
+  // Strip ANSI codes to measure visible width
+  const visible = text.replace(/\x1b\[[0-9;]*m/g, "");
+  const pad = Math.max(0, cols - visible.length - 1);
+  return " ".repeat(pad) + text;
+}
+
+async function updateUsageStatus(ctx: any, tps?: string, ttft?: string): Promise<void> {
+  const theme = ctx.ui.theme;
+  const apiKey = lastApiKey;
+  if (!apiKey) return;
+
+  const usage = await fetchUsage(apiKey);
+  if (!usage) return;
+
+  const perfParts: string[] = [];
+  if (tps) perfParts.push(`T/S:${tps}`);
+  if (ttft) perfParts.push(`TTFT:${ttft}`);
+  const perfStr = perfParts.length > 0 ? perfParts.join(" │ ") + " │ " : "";
+
+  const reqPart = usage.requestsLimit !== null
+    ? `${usage.requestsUsed}/${usage.requestsLimit}`
+    : `${usage.requestsUsed}`;
+  const resetPart = usage.resetsInMinutes !== null ? ` ⟳${usage.resetsInMinutes}m` : "";
+
+  ctx.ui.setStatus(
+    "umans",
+    rightAlign(theme.fg("dim", `Umans ${perfStr}${reqPart}${resetPart}`)),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
@@ -227,11 +259,16 @@ export default function (pi: ExtensionAPI) {
   let firstTokenTime = 0;
   let lastApiKey: string | null = null;
 
-  // Fetch and display usage on session start
+  // Show usage on session start
   pi.on("session_start", async (_event, ctx) => {
-    // We'll update the status bar when we get the API key from a request
-    const theme = ctx.ui.theme;
-    ctx.ui.setStatus("umans", theme.fg("dim", "Umans: initializing..."));
+    const apiKey = await ctx.modelRegistry.getApiKeyForProvider("umans").catch(() => undefined);
+    if (apiKey) {
+      lastApiKey = apiKey;
+      await updateUsageStatus(ctx, undefined, undefined);
+    } else {
+      const theme = ctx.ui.theme;
+      ctx.ui.setStatus("umans", rightAlign(theme.fg("dim", "Umans: /login umans")));
+    }
   });
 
   // Track turn timing
@@ -283,10 +320,10 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    const perfStr = `T/S:${tps} │ TTFT:${ttft}`;
+    const perfStr = usageStr ? `T/S:${tps} │ TTFT:${ttft}${usageStr}` : `T/S:${tps} │ TTFT:${ttft}`;
     ctx.ui.setStatus(
       "umans",
-      theme.fg("dim", `Umans ${perfStr}${usageStr}`),
+      rightAlign(theme.fg("dim", `Umans ${perfStr}`)),
     );
   });
 }
