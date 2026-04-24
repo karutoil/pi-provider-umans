@@ -83,7 +83,9 @@ function mapUmansModel(id: string, info: any): ProviderModelConfig {
     reasoning: true,
     input: supportsVision ? ["text", "image"] : ["text"],
     contextWindow: caps.context_window ?? 200000,
-    maxTokens: caps.max_tokens ?? 8192,
+    // API reports conservative per-request defaults (e.g. 8192 for Kimi models)
+    // but these models support much more — floor at 50000 so reasoning has room
+    maxTokens: Math.max(caps.max_tokens ?? 8192, 50000),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: {
       supportsDeveloperRole: false,
