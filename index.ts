@@ -240,18 +240,12 @@ export default function (pi: ExtensionAPI) {
     firstTokenTime = 0;
   });
 
-  // Track first token (TTFT)
-  pi.on("message_update", async (event, ctx) => {
+  // Track first token (TTFT) — just record the time, no separate status
+  pi.on("message_update", async (event, _ctx) => {
     if (firstTokenTime === 0 && turnStartTime > 0) {
       const msg = event.message as AssistantMessage;
       if (msg.role === "assistant" && msg.content?.length > 0) {
         firstTokenTime = Date.now();
-        const ttft = firstTokenTime - turnStartTime;
-        const theme = ctx.ui.theme;
-        ctx.ui.setStatus(
-          "umans-ttft",
-          theme.fg("dim", `TTFT: ${fmtDuration(ttft)}`),
-        );
       }
     }
   });
@@ -269,9 +263,8 @@ export default function (pi: ExtensionAPI) {
       elapsed > 0 && outputTokens > 0 ? (outputTokens / (elapsed / 1000)).toFixed(0) : "—";
     const ttft = firstTokenTime > 0 ? fmtDuration(firstTokenTime - turnStartTime) : "—";
 
-    // Try to get API key for usage fetch
-    // Use the apiKey from environment or oauth
-    const apiKey = process.env.UMANS_API_KEY || lastApiKey;
+    // Resolve API key from model registry (covers env var and OAuth)
+    let apiKey = await ctx.modelRegistry.getApiKeyForProvider("umans").catch(() => undefined) || lastApiKey;
     let usageStr = "";
 
     if (apiKey) {
