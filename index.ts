@@ -22,7 +22,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   },
   {
     id: "umans-kimi-k2.5",
@@ -32,7 +32,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   },
   {
     id: "umans-kimi-k2.6",
@@ -42,7 +42,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   },
   {
     id: "umans-glm-5.1",
@@ -52,7 +52,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 202752,
     maxTokens: 131072,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   },
   {
     id: "umans-minimax-m2.5",
@@ -62,7 +62,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 204800,
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   },
 ];
 
@@ -85,7 +85,7 @@ function mapUmansModel(id: string, info: any): ProviderModelConfig {
     contextWindow: caps.context_window ?? 200000,
     maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek" },
+    compat: { supportsDeveloperRole: false, supportsReasoningEffort: true, thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
   };
 }
 
