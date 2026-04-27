@@ -1,0 +1,80 @@
+name: Auto Tag
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  auto-tag:
+    if: "!contains(github.event.head_commit.message, 'chore: bump version to')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine next version
+        id: version
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+
+          # Check if there are commits since last tag
+          if [ "$(git rev-list -n1 "$LATEST_TAG" 2>/dev/null || true)" = "$(git rev-parse HEAD)" ]; then
+            echo "No new commits since $LATEST_TAG, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
+
+          BUMP="patch"
+          if echo "$COMMITS" | grep -qE '^(feat|feat\(.*\)):'; then
+            BUMP="minor"
+          fi
+          if echo "$COMMITS" | grep -qE '(BREAKING CHANGE|^.+!: )'; then
+            BUMP="major"
+          fi
+
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          case $BUMP in
+            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH+1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          NEW_TAG="v${NEW_VERSION}"
+
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "bump=${BUMP}" >> "$GITHUB_OUTPUT"
+
+          echo "=> Bumping ${BUMP}: ${LATEST_TAG} → ${NEW_TAG}"
+
+      - name: Update package.json
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          npm version ${{ steps.version.outputs.new_version }} --no-git-tag-version
+
+      - name: Commit version bump
+        if: steps.version.outputs.skip != 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version to ${{ steps.version.outputs.new_tag }}"
+          file_pattern: package.json
+
+      - name: Create and push tag
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          git tag "${{ steps.version.outputs.new_tag }}"
+          git push origin "${{ steps.version.outputs.new_tag }}"
