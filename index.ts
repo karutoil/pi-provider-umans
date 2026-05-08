@@ -22,7 +22,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   },
   {
     id: "umans-kimi-k2.5",
@@ -32,7 +32,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   },
   {
     id: "umans-kimi-k2.6",
@@ -42,7 +42,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 262144,
     maxTokens: 32768,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   },
   {
     id: "umans-glm-5.1",
@@ -52,7 +52,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 202752,
     maxTokens: 131072,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   },
   {
     id: "umans-minimax-m2.5",
@@ -62,7 +62,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
     contextWindow: 204800,
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   },
 ];
 
@@ -76,7 +76,6 @@ function mapUmansModel(id: string, info: any): ProviderModelConfig {
     typeof recommendedMax === "number" && recommendedMax >= 8192
       ? recommendedMax
       : 65000;
-
   return {
     id,
     name: info.display_name || id,
@@ -85,7 +84,7 @@ function mapUmansModel(id: string, info: any): ProviderModelConfig {
     contextWindow: caps.context_window ?? 200000,
     maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, thinkingFormat: "anthropic", requiresReasoningContentOnAssistantMessages: true },
+    compat: { supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false },
   };
 }
 
@@ -248,6 +247,136 @@ export default function (pi: ExtensionAPI) {
       refreshToken: refreshUmansToken,
       getApiKey,
     },
+  });
+
+  let lastRequestModel: string | null = null;
+
+  // --- Sanitize conversation history: ensure every tool_use has a tool_result ---
+  // The Umans API gateway translates Anthropic-format requests to OpenAI format
+  // for non-Claude models. OpenAI strictly requires every tool_calls entry to
+  // have a matching role:"tool" response. When context compaction drops tool
+  // result messages, the orphaned tool_use blocks cause a 400 error.
+  pi.on("before_provider_request", async (event, _ctx) => {
+    const p = event.payload as Record<string, any>;
+    const messages = p?.messages;
+    if (Array.isArray(messages) && messages.length > 0) {
+      // Collect all tool_use IDs from assistant messages
+      const toolUseIds = new Set<string>();
+      for (const msg of messages) {
+        if (msg.role === "assistant" && Array.isArray(msg.content)) {
+          for (const block of msg.content) {
+            if (block.type === "tool_use" && block.id) {
+              toolUseIds.add(block.id);
+            }
+          }
+        }
+      }
+
+      // Collect all tool_result IDs from user messages
+      const toolResultIds = new Set<string>();
+      for (const msg of messages) {
+        if (msg.role === "user" && Array.isArray(msg.content)) {
+          for (const block of msg.content) {
+            if (block.type === "tool_result" && block.tool_use_id) {
+              toolResultIds.add(block.tool_use_id);
+            }
+          }
+        }
+      }
+
+      // Find orphaned tool_use IDs (no matching tool_result)
+      const orphanedIds = [...toolUseIds].filter((id) => !toolResultIds.has(id));
+
+      if (orphanedIds.length > 0) {
+        console.warn(
+          `[pi-provider-umans] Found ${orphanedIds.length} orphaned tool_use(s) without tool_result: ${orphanedIds.join(", ")}`,
+        );
+
+        // Strategy: add synthetic tool_result blocks to the last user message,
+        // or insert a new user message if needed.
+        // We need to find which assistant message each orphaned tool_use belongs to
+        // and insert the synthetic tool_result right after it.
+        const patchedMessages = [...messages];
+        let insertCount = 0;
+
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i];
+          if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+
+          // Find orphaned tool_use blocks in this assistant message
+          const orphanedBlocks = msg.content.filter(
+            (block: any) => block.type === "tool_use" && orphanedIds.includes(block.id),
+          );
+          if (orphanedBlocks.length === 0) continue;
+
+          // Check if the next message is a user message with tool_results
+          const nextIdx = i + insertCount + 1;
+          const nextMsg = patchedMessages[nextIdx];
+
+          if (nextMsg?.role === "user" && Array.isArray(nextMsg.content)) {
+            // Append synthetic tool_result blocks to existing user message
+            const syntheticResults = orphanedBlocks.map((block: any) => ({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: "[tool result was lost during context compaction]",
+            }));
+            patchedMessages[nextIdx] = {
+              ...nextMsg,
+              content: [...nextMsg.content, ...syntheticResults],
+            };
+          } else {
+            // Insert a new user message with synthetic tool_result blocks
+            const syntheticResults = orphanedBlocks.map((block: any) => ({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: "[tool result was lost during context compaction]",
+            }));
+            patchedMessages.splice(nextIdx, 0, {
+              role: "user",
+              content: syntheticResults,
+            });
+            insertCount++;
+          }
+        }
+
+        p.messages = patchedMessages;
+      }
+    }
+
+    // --- Fix thinking param for non-Claude models ---
+    // NOTE: if we patched messages above, we must return the payload so the
+    // mutation takes effect (some Pi versions copy the payload before sending).
+    const hadOrphanedTools = orphanedIds && orphanedIds.length > 0;
+    const model = p?.model ?? "";
+    if (!model.includes("qwen") && !model.includes("flash")) return;
+    lastRequestModel = model;
+    const log = (msg: string) => {
+      const line = `[${new Date().toISOString()}] ${msg}\n`;
+      try { Deno.writeTextFileSync("/tmp/umans-debug.log", line, { append: true }); } catch {}
+      console.error(`[pi-provider-umans] ${msg}`);
+    };
+    log(`BEFORE model=${model} thinking=${JSON.stringify(p.thinking)}`);
+    if (p.thinking && p.thinking.type === "enabled") {
+      log(`FIXING — removing budget_tokens, keeping display=${p.thinking.display}`);
+      try {
+        // Mutate in-place rather than spread — the payload may have non-enumerable props
+        delete p.thinking.budget_tokens;
+        log(`AFTER thinking=${JSON.stringify(p.thinking)}`);
+        return p;
+      } catch (err: any) {
+        log(`FIX FAILED: ${err?.message ?? err}`);
+      }
+    } else {
+      log(`NO FIX — thinking.type=${p.thinking?.type}`);
+    }
+  });
+
+  pi.on("after_provider_response", async (event, _ctx) => {
+    if (lastRequestModel?.includes("qwen") || lastRequestModel?.includes("flash")) {
+      console.log(`[pi-provider-umans] RESPONSE status=${event.status} model=${lastRequestModel}`);
+      console.log(`[pi-provider-umans]   headers:`, JSON.stringify(Object.fromEntries(Object.entries(event.headers).filter(([k]) => k.startsWith("x-") || k.startsWith("content-type")))));
+      lastRequestModel = null;
+    }
   });
 
 
