@@ -235,6 +235,19 @@ async function updateUsageStatus(ctx: any, tps?: string, ttft?: string): Promise
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
+  // --- Proactive compaction for umans models ---
+  // Umans models have hard token limits and PI's default compaction threshold
+  // (contextWindow - reserveTokens) can leave too little margin. When context
+  // hits 90% of the window, we trigger compaction proactively to avoid the
+  // "request exceeded model token limit" 400 error that creates a death spiral
+  // (compaction itself fails because the context is too large to summarize).
+  const COMPACT_THRESHOLD_PERCENT = 90;
+  let compactionInProgress = false;
+
+  function isUmansModel(modelId: string): boolean {
+    return modelId.startsWith("umans-");
+  }
+
   // --- Provider registration ---
   pi.registerProvider("umans", {
     baseUrl: "https://api.code.umans.ai/v1",
@@ -327,6 +340,29 @@ export default function (pi: ExtensionAPI) {
     }
 
     p.messages = newMessages;
+
+    // --- Context overflow guard on outgoing request ---
+    // Log a warning if the payload looks like it would exceed the model's context
+    // window. The turn_end handler should catch most cases proactively, but this
+    // guards against context growth within a single turn (e.g. large tool results)
+    // that pushes past the 90% threshold between turn_end checks.
+    const modelConfig = models.find((m) => m.id === model);
+    const contextWindow = modelConfig?.contextWindow ?? 0;
+    if (contextWindow > 0 && Array.isArray(p.messages)) {
+      // Rough token estimate: ~4 chars per token for the serialized messages
+      const serializedLength = JSON.stringify(p.messages).length;
+      const estimatedTokens = Math.ceil(serializedLength / 4);
+      const threshold = Math.floor(contextWindow * COMPACT_THRESHOLD_PERCENT / 100);
+
+      if (estimatedTokens >= threshold) {
+        console.warn(
+          `[pi-provider-umans] Outgoing request estimated at ${estimatedTokens} tokens, ` +
+          `exceeding ${COMPACT_THRESHOLD_PERCENT}% threshold (${threshold}/${contextWindow}). ` +
+          `Compaction should trigger on the next turn_end. The request may fail with a 400 error.`,
+        );
+      }
+    }
+
     return p;
   });
 
@@ -350,6 +386,65 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_start", async (_event, _ctx) => {
     turnStartTime = Date.now();
     firstTokenTime = 0;
+  });
+
+  // Proactive compaction: check context usage after each turn for umans models
+  pi.on("turn_end", async (_event, ctx) => {
+    if (compactionInProgress) return;
+
+    const modelId = ctx.model?.id ?? "";
+    if (!isUmansModel(modelId)) return;
+
+    const usage = ctx.getContextUsage();
+    if (!usage || usage.percent === null || usage.tokens === null) return;
+
+    if (usage.percent >= COMPACT_THRESHOLD_PERCENT) {
+      console.warn(
+        `[pi-provider-umans] Context at ${usage.percent.toFixed(1)}% (${usage.tokens}/${usage.contextWindow} tokens) — ` +
+        `triggering proactive compaction at ${COMPACT_THRESHOLD_PERCENT}% threshold`,
+      );
+      compactionInProgress = true;
+      ctx.compact({
+        customInstructions: "Focus on recent changes and active work. Preserve tool call/result pairs.",
+        onComplete: () => {
+          compactionInProgress = false;
+        },
+        onError: (error) => {
+          console.error(`[pi-provider-umans] Proactive compaction failed: ${error.message}`);
+          compactionInProgress = false;
+        },
+      });
+    }
+  });
+
+  // --- Last-resort recovery: detect 400 token limit errors and force compaction ---
+  // If the API already returned a 400 because the request exceeded the token
+  // limit, PI's own compaction recovery may also fail (same death spiral).
+  // We can't prevent the request, but we can detect the failure and force
+  // compaction immediately so the next retry has a smaller context.
+  pi.on("after_provider_response", async (event, ctx) => {
+    if (event.status !== 400) return;
+
+    const modelId = ctx.model?.id ?? "";
+    if (!isUmansModel(modelId)) return;
+
+    if (!compactionInProgress) {
+      console.warn(
+        `[pi-provider-umans] Received 400 from API — likely token limit exceeded. ` +
+        `Forcing compaction to shrink context for retry.`,
+      );
+      compactionInProgress = true;
+      ctx.compact({
+        customInstructions: "Emergency compaction: context exceeded model token limit. Focus only on the most recent work and critical context. Preserve tool call/result pairs.",
+        onComplete: () => {
+          compactionInProgress = false;
+        },
+        onError: (error) => {
+          console.error(`[pi-provider-umans] Emergency compaction failed: ${error.message}`);
+          compactionInProgress = false;
+        },
+      });
+    }
   });
 
   // Track first token (TTFT) — just record the time, no separate status
