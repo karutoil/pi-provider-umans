@@ -190,12 +190,6 @@ async function fetchUsage(apiKey: string): Promise<UsageData | null> {
 // Status bar
 // ---------------------------------------------------------------------------
 
-function fmtNum(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
 function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -249,8 +243,6 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  let lastRequestModel: string | null = null;
-
   // --- Sanitize conversation history: ensure every tool_use has a tool_result ---
   // The Umans API gateway translates Anthropic-format requests to OpenAI format
   // for non-Claude models. OpenAI strictly requires every tool_calls entry to
@@ -259,6 +251,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_provider_request", async (event, _ctx) => {
     const p = event.payload as Record<string, any>;
     const messages = p?.messages;
+    let orphanedIds: string[] = [];
     if (Array.isArray(messages) && messages.length > 0) {
       // Collect all tool_use IDs from assistant messages
       const toolUseIds = new Set<string>();
@@ -285,7 +278,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Find orphaned tool_use IDs (no matching tool_result)
-      const orphanedIds = [...toolUseIds].filter((id) => !toolResultIds.has(id));
+      orphanedIds = [...toolUseIds].filter((id) => !toolResultIds.has(id));
 
       if (orphanedIds.length > 0) {
         console.warn(
@@ -346,36 +339,12 @@ export default function (pi: ExtensionAPI) {
     // --- Fix thinking param for non-Claude models ---
     // NOTE: if we patched messages above, we must return the payload so the
     // mutation takes effect (some Pi versions copy the payload before sending).
-    const hadOrphanedTools = orphanedIds && orphanedIds.length > 0;
     const model = p?.model ?? "";
     if (!model.includes("qwen") && !model.includes("flash")) return;
-    lastRequestModel = model;
-    const log = (msg: string) => {
-      const line = `[${new Date().toISOString()}] ${msg}\n`;
-      try { Deno.writeTextFileSync("/tmp/umans-debug.log", line, { append: true }); } catch {}
-      console.error(`[pi-provider-umans] ${msg}`);
-    };
-    log(`BEFORE model=${model} thinking=${JSON.stringify(p.thinking)}`);
     if (p.thinking && p.thinking.type === "enabled") {
-      log(`FIXING — removing budget_tokens, keeping display=${p.thinking.display}`);
-      try {
-        // Mutate in-place rather than spread — the payload may have non-enumerable props
-        delete p.thinking.budget_tokens;
-        log(`AFTER thinking=${JSON.stringify(p.thinking)}`);
-        return p;
-      } catch (err: any) {
-        log(`FIX FAILED: ${err?.message ?? err}`);
-      }
-    } else {
-      log(`NO FIX — thinking.type=${p.thinking?.type}`);
-    }
-  });
-
-  pi.on("after_provider_response", async (event, _ctx) => {
-    if (lastRequestModel?.includes("qwen") || lastRequestModel?.includes("flash")) {
-      console.log(`[pi-provider-umans] RESPONSE status=${event.status} model=${lastRequestModel}`);
-      console.log(`[pi-provider-umans]   headers:`, JSON.stringify(Object.fromEntries(Object.entries(event.headers).filter(([k]) => k.startsWith("x-") || k.startsWith("content-type")))));
-      lastRequestModel = null;
+      // Remove budget_tokens for non-Claude models (they don't support it)
+      delete p.thinking.budget_tokens;
+      return p;
     }
   });
 
